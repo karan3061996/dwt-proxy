@@ -1,7 +1,6 @@
 """
 DWT Delta Exchange Proxy Server
 Fixed IP proxy for Delta Exchange API
-Deploy on Railway.app for a permanent fixed IP
 """
 
 from flask import Flask, request, jsonify
@@ -19,20 +18,27 @@ DELTA_BASE = "https://api.india.delta.exchange"
 
 
 def generate_signature(api_secret, method, path, query_string, body):
-    """
-    Delta Exchange signature:
-    HMAC-SHA256 of: METHOD + TIMESTAMP + PATH + QUERY_STRING + BODY
-    No '?' between path and query_string in the signed string
-    Timestamp is in SECONDS
-    """
     timestamp = str(int(time.time()))
-    message = method + timestamp + path + query_string + body
+    # Delta signature includes '?' before query string if query exists
+    if query_string:
+        message = method + timestamp + path + "?" + query_string + body
+    else:
+        message = method + timestamp + path + body
     signature = hmac.new(
         api_secret.encode("utf-8"),
         message.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
     return timestamp, signature
+
+
+@app.route("/")
+def index():
+    return jsonify({
+        "status": "ok",
+        "service": "DWT Delta Proxy",
+        "routes": ["/health", "/myip", "/test", "/delta/v2/..."]
+    })
 
 
 @app.route("/health")
@@ -58,7 +64,7 @@ def myip():
 
     return jsonify({
         "ip_to_whitelist": ip,
-        "message": "Add this IP to your Delta Exchange API key whitelist. This IP is fixed and will never change."
+        "message": "Add this IP to your Delta Exchange API key whitelist. This IP is fixed."
     })
 
 
@@ -77,10 +83,10 @@ def test():
         resp = requests.get(
             DELTA_BASE + path,
             headers={
-                "Accept":     "application/json",
-                "api-key":    api_key,
-                "timestamp":  timestamp,
-                "signature":  signature,
+                "Accept":    "application/json",
+                "api-key":   api_key,
+                "timestamp": timestamp,
+                "signature": signature,
             },
             timeout=10
         )
@@ -88,12 +94,7 @@ def test():
         return jsonify({
             "http_status":    resp.status_code,
             "success":        data.get("success", False),
-            "delta_response": data,
-            "debug": {
-                "timestamp_used": timestamp,
-                "signed_string":  "GET" + timestamp + path,
-                "api_key_sent":   api_key[:6] + "..."
-            }
+            "delta_response": data
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -140,7 +141,6 @@ def proxy(endpoint):
         except Exception:
             return jsonify({"error": "Bad JSON from Delta", "raw": resp.text[:300]}), 502
 
-        # Surface IP clearly if not whitelisted
         if isinstance(data.get("error"), dict):
             err = data["error"]
             if err.get("code") == "ip_not_whitelisted_for_api_key":
@@ -160,9 +160,5 @@ def proxy(endpoint):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5050))
-    print(f"\n{'='*50}")
-    print(f"  DWT Delta Proxy running on port {port}")
-    print(f"  Visit /myip to get your fixed IP")
-    print(f"{'='*50}\n")
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
