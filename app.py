@@ -100,6 +100,57 @@ def test():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/debug")
+def debug():
+    """
+    Test signing with exact params from the error message.
+    Call: /debug?api_key=YOUR_KEY&api_secret=YOUR_SECRET
+    Shows exactly what string we sign and what signature we produce.
+    """
+    api_key    = request.args.get("api_key",    "").strip()
+    api_secret = request.args.get("api_secret", "").strip()
+
+    if not api_key or not api_secret:
+        return jsonify({"error": "Pass ?api_key=...&api_secret=... in URL"}), 400
+
+    # Replicate the exact call that fails
+    path         = "/v2/fills"
+    query_string = "page_size=50&start_time=1782844200&end_time=1785522599"
+    body         = ""
+    method       = "GET"
+    timestamp    = str(int(time.time()))
+
+    # What we sign
+    message_with_q    = method + timestamp + path + "?" + query_string + body
+    message_without_q = method + timestamp + path + query_string + body
+
+    import hmac as hmac_mod, hashlib as hl
+    sig_with_q = hmac_mod.new(
+        api_secret.encode("utf-8"),
+        message_with_q.encode("utf-8"),
+        hl.sha256
+    ).hexdigest()
+
+    sig_without_q = hmac_mod.new(
+        api_secret.encode("utf-8"),
+        message_without_q.encode("utf-8"),
+        hl.sha256
+    ).hexdigest()
+
+    return jsonify({
+        "timestamp": timestamp,
+        "with_question_mark": {
+            "signed_string": message_with_q,
+            "signature": sig_with_q
+        },
+        "without_question_mark": {
+            "signed_string": message_without_q,
+            "signature": sig_without_q
+        },
+        "note": "Compare the signed_string with what Delta shows in their error signature_data"
+    })
+
+
 @app.route("/delta/<path:endpoint>", methods=["GET", "POST", "PUT", "DELETE"])
 def proxy(endpoint):
     api_key    = request.headers.get("X-Api-Key",    "").strip()
@@ -114,6 +165,14 @@ def proxy(endpoint):
     method       = request.method.upper()
 
     timestamp, signature = generate_signature(api_secret, method, path, query_string, body)
+
+    # Log what we're signing for debugging
+    if query_string:
+        signed_str = method + timestamp + path + "?" + query_string + body
+    else:
+        signed_str = method + timestamp + path + body
+    print(f"SIGNING: {signed_str[:100]}")
+    print(f"SIG: {signature[:20]}...")
 
     headers = {
         "Accept":       "application/json",
